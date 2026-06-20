@@ -29,7 +29,7 @@ You are an expert software engineering agent executing a multi-phased project de
 ## 2. Technology Stack & Environment Blueprint
 
 *   **Operating System Environment:** Fedora 44 Linux.
-*   **Backend Subsystem (`/backend`):** Java 21, Spring Boot 3.x, `spring-boot-starter-websocket`, PostgreSQL (temporary queue), Managed via IntelliJ IDEA.
+*   **Backend Subsystem (`/backend`):** Java 25, Spring Boot 3.x, `spring-boot-starter-websocket`, PostgreSQL (temporary queue), Managed via IntelliJ IDEA.
 *   **Frontend Mobile Subsystem (`/frontend`):** React Native (TypeScript) utilizing the **Expo Framework** (Bare Workflow/Prebuild ecosystem).
 *   **Local Network Gateway Integration:** The React Native Android emulator maps host machine `localhost` to IP address `10.0.2.2`. Network connectivity parameters must respect this routing boundary.
 
@@ -59,7 +59,7 @@ You must step through these phases sequentially, invoking the **Plan & Confirm P
 *   **Tasks:**
     1. Initialize the Spring Boot project inside `/backend` with Gradle.
     2. Configure WebSocket protocol handshakes (`WebSocketHandler`).
-    3. Use docker to pull postgres image. Set up a localized PostgreSQL schema dedicated solely to the transient `PENDING` queue.
+    3. Use podman to pull postgres image. Set up a localized PostgreSQL schema dedicated solely to the transient `PENDING` queue.
     4. Implement the strict `ACK` receipt workflow: On receipt delivery acknowledgment from a WebSocket client, trigger an instantaneous SQL `DELETE` row execution.
     5. Configure a Spring `@Scheduled` task to hard-flush any expired items matching the 24-hour TTL constraint.
 

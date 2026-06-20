@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: relay
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relaypass
+    ports:
+      - "5432:5432"
+    volumes:
+      # Using a local folder with :Z solves the rootless permission issue
+      - ./pgdata:/var/lib/postgresql/data:Z
+    healthcheck:
+      # Adding -h 127.0.0.1 ensures the healthcheck resolves correctly
+      test: ["CMD-SHELL", "pg_isready -U relay -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
