@@ -1,6 +1,6 @@
 import 'react-native-get-random-values';
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, Button, FlatList, StyleSheet } from 'react-native';
+import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator } from 'react-native';
 import { v4 as uuidv4 } from 'uuid';
 import * as SQLite from 'expo-sqlite';
 import { insertMessage, deleteMessagesBySession, getMessagesBySession, initDb } from '../storage/sqliteClient';
@@ -17,15 +17,23 @@ export default function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionKey] = useState<string>(uuidv4());
   const [db, setDb] = useState<SQLite.SQLiteDatabase | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const setup = async () => {
       try {
+        console.log('ChatScreen: Starting DB initialization...');
         const database = await initDb();
+        console.log('ChatScreen: DB initialized successfully');
         setDb(database);
         await loadMessages(database);
+        setLoading(false);
       } catch (err) {
-        console.warn('Error initializing DB:', err);
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Error initializing DB:', errorMsg);
+        setError(errorMsg);
+        setLoading(false);
       }
     };
     setup();
@@ -70,32 +78,51 @@ export default function ChatScreen() {
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={messages}
-        keyExtractor={m => m.id}
-        renderItem={({ item }) => (
-          <View style={styles.msg}>
-            <Text>{item.payload}</Text>
-            <Text style={styles.timestamp}>{new Date(item.created_at).toLocaleTimeString()}</Text>
+      {loading && (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#0000ff" />
+          <Text style={styles.loadingText}>Initializing database...</Text>
+        </View>
+      )}
+      {error && (
+        <View style={styles.center}>
+          <Text style={styles.errorText}>Error: {error}</Text>
+          <Button title="Retry" onPress={() => window.location.reload?.()} />
+        </View>
+      )}
+      {!loading && !error && (
+        <>
+          <FlatList
+            data={messages}
+            keyExtractor={m => m.id}
+            renderItem={({ item }) => (
+              <View style={styles.msg}>
+                <Text>{item.payload}</Text>
+                <Text style={styles.timestamp}>{new Date(item.created_at).toLocaleTimeString()}</Text>
+              </View>
+            )}
+            inverted
+          />
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.input}
+              value={text}
+              onChangeText={setText}
+              placeholder="Type a message"
+            />
+            <Button title="Send" onPress={send} />
           </View>
-        )}
-        inverted
-      />
-      <View style={styles.inputRow}>
-        <TextInput
-          style={styles.input}
-          value={text}
-          onChangeText={setText}
-          placeholder="Type a message"
-        />
-        <Button title="Send" onPress={send} />
-      </View>
+        </>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 12 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { marginTop: 12, fontSize: 16, color: '#0000ff' },
+  errorText: { fontSize: 16, color: '#ff0000', textAlign: 'center', marginBottom: 12 },
   msg: { padding: 8, borderBottomWidth: 1, borderColor: '#eee' },
   timestamp: { fontSize: 12, color: '#999', marginTop: 4 },
   inputRow: { flexDirection: 'row', alignItems: 'center' },

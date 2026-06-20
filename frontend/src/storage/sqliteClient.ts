@@ -1,11 +1,21 @@
 import * as SQLite from 'expo-sqlite';
 
 export async function initDb(): Promise<SQLite.SQLiteDatabase> {
-  const db = await SQLite.openDatabaseAsync('gupshup.db');
-  await db.execAsync(
-    `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, session_key TEXT, payload TEXT, created_at INTEGER);`
-  );
-  return db;
+  try {
+    console.log('initDb: Opening database...');
+    const db = await SQLite.openDatabaseAsync('gupshup.db');
+    console.log('initDb: Database opened successfully');
+    
+    console.log('initDb: Creating table...');
+    await db.execAsync(
+      `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, session_key TEXT, payload TEXT, created_at INTEGER);`
+    );
+    console.log('initDb: Table created successfully');
+    return db;
+  } catch (err) {
+    console.error('initDb: Error -', err);
+    throw err;
+  }
 }
 
 export async function insertMessage(
