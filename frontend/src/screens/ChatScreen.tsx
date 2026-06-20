@@ -1,28 +1,93 @@
 import 'react-native-get-random-values';
-import React, {useState, useEffect} from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, Button, FlatList, StyleSheet } from 'react-native';
 import { v4 as uuidv4 } from 'uuid';
-import { initDb } from '../storage/sqliteClient';
+import * as SQLite from 'expo-sqlite';
+import { insertMessage, deleteMessagesBySession, getMessagesBySession, initDb } from '../storage/sqliteClient';
+import useAppStateCleanup from '../hooks/useAppStateCleanup';
+
+interface ChatMessage {
+  id: string;
+  payload: string;
+  created_at: number;
+}
 
 export default function ChatScreen() {
   const [text, setText] = useState('');
-  const [messages, setMessages] = useState<Array<{id:string; payload:string}>>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sessionKey] = useState<string>(uuidv4());
+  const [db, setDb] = useState<SQLite.SQLiteDatabase | null>(null);
 
-  useEffect(() => { initDb(); }, []);
+  useEffect(() => {
+    const setup = async () => {
+      try {
+        const database = await initDb();
+        setDb(database);
+        await loadMessages(database);
+      } catch (err) {
+        console.warn('Error initializing DB:', err);
+      }
+    };
+    setup();
+  }, [sessionKey]);
 
-  function send() {
-    if (!text.trim()) return;
-    const msg = { id: uuidv4(), payload: text };
-    setMessages(prev => [msg, ...prev]);
-    setText('');
-    // TODO: encrypt and persist ciphertext to local DB (Task 2+)
+  const loadMessages = async (database: SQLite.SQLiteDatabase) => {
+    try {
+      const msgs = await getMessagesBySession(database, sessionKey);
+      setMessages(msgs);
+    } catch (err) {
+      console.warn('Error loading messages:', err);
+    }
+  };
+
+  const handleCleanup = useCallback(async () => {
+    if (!db) return;
+    try {
+      await deleteMessagesBySession(db, sessionKey);
+      setMessages([]);
+      console.log('Session cleaned up on app background');
+    } catch (err) {
+      console.warn('Error during cleanup:', err);
+    }
+  }, [db, sessionKey]);
+
+  useAppStateCleanup(handleCleanup);
+
+  async function send() {
+    if (!text.trim() || !db) return;
+    const msgId = uuidv4();
+    const timestamp = Date.now();
+    const msg: ChatMessage = { id: msgId, payload: text, created_at: timestamp };
+
+    try {
+      await insertMessage(db, msgId, sessionKey, text, timestamp);
+      setMessages(prev => [msg, ...prev]);
+      setText('');
+    } catch (err) {
+      console.warn('Error sending message:', err);
+    }
   }
 
   return (
     <View style={styles.container}>
-      <FlatList data={messages} keyExtractor={m => m.id} renderItem={({item}) => (<View style={styles.msg}><Text>{item.payload}</Text></View>)} inverted />
+      <FlatList
+        data={messages}
+        keyExtractor={m => m.id}
+        renderItem={({ item }) => (
+          <View style={styles.msg}>
+            <Text>{item.payload}</Text>
+            <Text style={styles.timestamp}>{new Date(item.created_at).toLocaleTimeString()}</Text>
+          </View>
+        )}
+        inverted
+      />
       <View style={styles.inputRow}>
-        <TextInput style={styles.input} value={text} onChangeText={setText} placeholder="Type a message" />
+        <TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder="Type a message"
+        />
         <Button title="Send" onPress={send} />
       </View>
     </View>
@@ -32,6 +97,7 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 12 },
   msg: { padding: 8, borderBottomWidth: 1, borderColor: '#eee' },
+  timestamp: { fontSize: 12, color: '#999', marginTop: 4 },
   inputRow: { flexDirection: 'row', alignItems: 'center' },
   input: { flex: 1, borderWidth: 1, borderColor: '#ccc', padding: 8, marginRight: 8, borderRadius: 4 },
 });
