@@ -1,3 +1,4 @@
+import 'react-native-get-random-values';
 import React, {useState, useEffect} from 'react';
 import { View, Text, TextInput, Button, FlatList, StyleSheet } from 'react-native';
 import { v4 as uuidv4 } from 'uuid';
