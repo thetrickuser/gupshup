@@ -4,6 +4,7 @@ import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator 
 import { v4 as uuidv4 } from 'uuid';
 import * as SQLite from 'expo-sqlite';
 import { insertMessage, deleteMessagesBySession, getMessagesBySession, initDb } from '../storage/sqliteClient';
+import { deriveSessionKey } from '../crypto/encryptionUtils';
 import useAppStateCleanup from '../hooks/useAppStateCleanup';
 
 interface ChatMessage {
@@ -16,6 +17,7 @@ export default function ChatScreen() {
   const [text, setText] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionKey] = useState<string>(uuidv4());
+  const [encryptionKey, setEncryptionKey] = useState<string | null>(null);
   const [db, setDb] = useState<SQLite.SQLiteDatabase | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +29,13 @@ export default function ChatScreen() {
         const database = await initDb();
         console.log('ChatScreen: DB initialized successfully');
         setDb(database);
-        await loadMessages(database);
+        
+        // Derive encryption key from session
+        const key = deriveSessionKey(sessionKey, 'default-device');
+        setEncryptionKey(key);
+        console.log('ChatScreen: Encryption key derived');
+        
+        await loadMessages(database, key);
         setLoading(false);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -39,9 +47,9 @@ export default function ChatScreen() {
     setup();
   }, [sessionKey]);
 
-  const loadMessages = async (database: SQLite.SQLiteDatabase) => {
+  const loadMessages = async (database: SQLite.SQLiteDatabase, key: string) => {
     try {
-      const msgs = await getMessagesBySession(database, sessionKey);
+      const msgs = await getMessagesBySession(database, sessionKey, key);
       setMessages(msgs);
     } catch (err) {
       console.warn('Error loading messages:', err);
@@ -62,13 +70,13 @@ export default function ChatScreen() {
   useAppStateCleanup(handleCleanup);
 
   async function send() {
-    if (!text.trim() || !db) return;
+    if (!text.trim() || !db || !encryptionKey) return;
     const msgId = uuidv4();
     const timestamp = Date.now();
     const msg: ChatMessage = { id: msgId, payload: text, created_at: timestamp };
 
     try {
-      await insertMessage(db, msgId, sessionKey, text, timestamp);
+      await insertMessage(db, msgId, sessionKey, text, timestamp, encryptionKey);
       setMessages(prev => [msg, ...prev]);
       setText('');
     } catch (err) {

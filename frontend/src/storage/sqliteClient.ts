@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { encryptPayload, decryptPayload } from '../crypto/encryptionUtils';
 
 export async function initDb(): Promise<SQLite.SQLiteDatabase> {
   try {
@@ -23,22 +24,33 @@ export async function insertMessage(
   id: string,
   sessionKey: string,
   payload: string,
-  timestamp: number
+  timestamp: number,
+  encryptionKey: string
 ): Promise<void> {
+  const encrypted = encryptPayload(payload, encryptionKey);
   await db.runAsync(
     `INSERT INTO messages (id, session_key, payload, created_at) VALUES (?, ?, ?, ?);`,
-    [id, sessionKey, payload, timestamp]
+    [id, sessionKey, encrypted, timestamp]
   );
 }
 
 export async function getMessagesBySession(
   db: SQLite.SQLiteDatabase,
-  sessionKey: string
+  sessionKey: string,
+  encryptionKey: string
 ): Promise<Array<{ id: string; payload: string; created_at: number }>> {
-  const messages = await db.getAllAsync(
+  const rows = await db.getAllAsync(
     `SELECT id, payload, created_at FROM messages WHERE session_key = ? ORDER BY created_at DESC;`,
     [sessionKey]
-  );
+  ) as Array<{ id: string; payload: string; created_at: number }>;
+  
+  // Decrypt all payloads before returning
+  const messages = rows.map(row => ({
+    id: row.id,
+    payload: decryptPayload(row.payload, encryptionKey),
+    created_at: row.created_at,
+  }));
+  
   return messages;
 }
 
