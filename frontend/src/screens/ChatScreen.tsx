@@ -22,10 +22,14 @@ export default function ChatScreen() {
   const [db, setDb] = useState<SQLite.SQLiteDatabase | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string>(''); // Leave empty initially so it doesn't auto-connect
+  
+  // Typing state for input controls
+  const [userId, setUserId] = useState<string>('');
   const [recipient, setRecipient] = useState<string>('');
+  
+  // Network locking state to prevent keystroke re-connections
+  const [activeConnectedUser, setActiveConnectedUser] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false); // Visual feedback state
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -33,15 +37,14 @@ export default function ChatScreen() {
       try {
         console.log('ChatScreen: Starting DB initialization...');
         const database = await initDb();
-        console.log('ChatScreen: DB initialized successfully');
         setDb(database);
         
-        // Derive encryption key from session
-        const key = deriveSessionKey(sessionKey, 'default-device');
-        setEncryptionKey(key);
-        console.log('ChatScreen: Encryption key derived');
+        // Use a uniform placeholder secret key so different local nodes can decrypt each other's packets
+        const sharedTestingKey = "super-secret-shared-key-123";
+        setEncryptionKey(sharedTestingKey);
+        console.log('ChatScreen: Shared testing encryption key locked in');
         
-        await loadMessages(database, key);
+        await loadMessages(database, sharedTestingKey);
         setLoading(false);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -62,21 +65,18 @@ export default function ChatScreen() {
     }
   };
 
-  // 2. Updated WebSocket Connection Logic
-useEffect(() => {
-    // Only connect if the database is ready, encryption is derived, AND the user explicitly provided an ID
-    if (!db || !encryptionKey || !userId) return;
+  // Socket management effect - depends ONLY on activeConnectedUser, not userId typing events
+  useEffect(() => {
+    if (!db || !encryptionKey || !activeConnectedUser) return;
 
-    // A bulletproof emulator check: Expo's hostUri contains "10.0.2.2" or "localhost" on virtual devices
     const manifestDebuggerHost = Constants.expoConfig?.hostUri; 
     const hostIp = manifestDebuggerHost ? manifestDebuggerHost.split(':')[0] : '192.168.1.50'; 
 
     const isEmulator = hostIp.includes('10.0.2.2') || hostIp.includes('127.0.0.1') || hostIp.includes('localhost');
     const resolvedHost = isEmulator ? '10.0.2.2' : hostIp;
 
-    // Note: Your backend code expects "?user=", make sure it matches your backend query parameter mapping
-    const socketUrl = `ws://${resolvedHost}:8080/ws?user=${encodeURIComponent(userId)}`;
-    console.log('Attempting connection to:', socketUrl);
+    const socketUrl = `ws://${resolvedHost}:8080/ws?user=${encodeURIComponent(activeConnectedUser)}`;
+    console.log('Initiating connection to:', socketUrl);
     
     const socket = new WebSocket(socketUrl);
     wsRef.current = socket;
@@ -84,18 +84,16 @@ useEffect(() => {
     socket.onopen = () => {
       console.log('WebSocket successfully connected to', socketUrl);
       setConnected(true);
-      setIsConnecting(false);
     };
 
     socket.onclose = () => {
       console.log('WebSocket disconnected');
       setConnected(false);
-      setIsConnecting(false);
+      setActiveConnectedUser(null); // Reset lock state on close
     };
 
     socket.onerror = (event) => {
       console.warn('WebSocket error', event);
-      setIsConnecting(false);
     };
 
     socket.onmessage = async (event) => {
@@ -107,7 +105,10 @@ useEffect(() => {
         if (type === 'ACK') return;
 
         if (type === 'MSG' && node.cipher && node.id) {
+          console.log("RAW INBOUND CIPHER:", node.cipher);
           const decrypted = decryptPayload(node.cipher, encryptionKey);
+          console.log("DECRYPTED RESULT TO RENDER:", decrypted);
+
           const receivedMessage: ChatMessage = {
             id: node.id,
             payload: decrypted,
@@ -133,7 +134,16 @@ useEffect(() => {
       wsRef.current = null;
       setConnected(false);
     };
-}, [db, encryptionKey, sessionKey, userId]);
+  }, [db, encryptionKey, sessionKey, activeConnectedUser]);
+
+  const handleConnectToggle = () => {
+    if (connected) {
+      wsRef.current?.close();
+    } else {
+      if (!userId.trim()) return;
+      setActiveConnectedUser(userId.trim());
+    }
+  };
 
   const handleCleanup = useCallback(async () => {
     if (!db) return;
@@ -149,7 +159,7 @@ useEffect(() => {
   useAppStateCleanup(handleCleanup);
 
   async function send() {
-    if (!text.trim() || !db || !encryptionKey || !userId || !recipient) return;
+    if (!text.trim() || !db || !encryptionKey || !activeConnectedUser || !recipient) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket is not open. Cannot send message.');
       return;
@@ -161,7 +171,7 @@ useEffect(() => {
     const outgoing = {
       type: 'MSG',
       id: msgId,
-      from: userId,
+      from: activeConnectedUser,
       to: recipient,
       cipher,
     };
@@ -187,7 +197,6 @@ useEffect(() => {
       {error && (
         <View style={styles.center}>
           <Text style={styles.errorText}>Error: {error}</Text>
-          <Button title="Retry" onPress={() => window.location.reload?.()} />
         </View>
       )}
       {!loading && !error && (
@@ -199,8 +208,9 @@ useEffect(() => {
                 style={styles.metaInput}
                 value={userId}
                 onChangeText={setUserId}
-                placeholder="Your user id"
+                placeholder="Your username"
                 autoCapitalize="none"
+                editable={!connected}
               />
             </View>
             <View style={styles.metaItem}>
@@ -214,15 +224,23 @@ useEffect(() => {
               />
             </View>
           </View>
+          
+          <Button 
+            title={connected ? "Disconnect from Server" : "Connect to Server"} 
+            onPress={handleConnectToggle} 
+            color={connected ? "#ff3b30" : "#007aff"}
+          />
+
           <Text style={styles.connectionText}>
-            WebSocket: {connected ? 'connected' : 'disconnected'}
+            WebSocket Status: {connected ? '🟢 Connected' : '🔴 Disconnected'}
           </Text>
+          
           <FlatList
             data={messages}
             keyExtractor={m => m.id}
             renderItem={({ item }) => (
               <View style={styles.msg}>
-                <Text>{item.payload}</Text>
+                <Text style={styles.messageText}>{item.payload}</Text>
                 <Text style={styles.timestamp}>{new Date(item.created_at).toLocaleTimeString()}</Text>
               </View>
             )}
@@ -239,50 +257,23 @@ useEffect(() => {
           </View>
         </>
       )}
-      <View style={styles.metaRow}>
-  <View style={styles.metaItem}>
-    <Text style={styles.label}>You</Text>
-    <TextInput
-      style={styles.metaInput}
-      value={userId}
-      onChangeText={setUserId}
-      placeholder="Type your username (e.g. bob)"
-      autoCapitalize="none"
-      editable={!connected} // Lock it once connected
-    />
-  </View>
-  <View style={styles.metaItem}>
-    <Text style={styles.label}>To</Text>
-    <TextInput
-      style={styles.metaInput}
-      value={recipient}
-      onChangeText={setRecipient}
-      placeholder="Recipient id"
-      autoCapitalize="none"
-    />
-  </View>
-</View>
-
-<Text style={styles.connectionText}>
-  WebSocket: {connected ? '🟢 Connected' : isConnecting ? '🟡 Connecting...' : '🔴 Disconnected'}
-</Text>
     </View>
-    
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 12 },
+  container: { flex: 1, padding: 12, marginTop: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 16, color: '#0000ff' },
   errorText: { fontSize: 16, color: '#ff0000', textAlign: 'center', marginBottom: 12 },
-  msg: { padding: 8, borderBottomWidth: 1, borderColor: '#eee' },
-  timestamp: { fontSize: 12, color: '#999', marginTop: 4 },
-  inputRow: { flexDirection: 'row', alignItems: 'center' },
+  msg: { padding: 10, borderBottomWidth: 1, borderColor: '#eee', marginVertical: 2 },
+  messageText: { fontSize: 16, color: '#000' },
+  timestamp: { fontSize: 11, color: '#999', marginTop: 4 },
+  inputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   input: { flex: 1, borderWidth: 1, borderColor: '#ccc', padding: 8, marginRight: 8, borderRadius: 4 },
   metaRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   metaItem: { flex: 1, marginRight: 8 },
   label: { fontSize: 12, color: '#666', marginBottom: 4 },
   metaInput: { borderWidth: 1, borderColor: '#ccc', padding: 8, borderRadius: 4 },
-  connectionText: { marginBottom: 10, color: '#333' },
+  connectionText: { marginVertical: 10, textAlign: 'center', fontWeight: '600' },
 });
