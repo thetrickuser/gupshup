@@ -1,4 +1,4 @@
-FROM gradle:8.5.2-jdk21 AS builder
+FROM gradle:9.6.0-jdk21-ubi AS builder
 WORKDIR /workspace
 
 COPY gradlew gradlew
