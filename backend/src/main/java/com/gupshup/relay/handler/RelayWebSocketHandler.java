@@ -46,6 +46,20 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
         return null;
     }
 
+    private void persistPendingMessage(String id, String fromUser, String toUser, String payload) {
+        try {
+            PendingMessage pm = new PendingMessage();
+            pm.setId(UUID.fromString(id));
+            pm.setFromUser(fromUser);
+            pm.setToUser(toUser);
+            pm.setCipher(payload);
+            pm.setCreatedAt(Instant.now());
+            messageRepository.save(pm);
+        } catch (Exception ex) {
+            logger.warn("Failed to persist pending message for {} -> {}: {}", fromUser, toUser, ex.getMessage());
+        }
+    }
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         // Enhanced user extraction: attributes, headers, then URI query
@@ -84,7 +98,10 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
                             if (pm.getCipher() != null) node.put("cipher", pm.getCipher());
 
                             String payload = mapper.writeValueAsString(node);
-                            if (session.isOpen()) session.sendMessage(new TextMessage(payload));
+                            if (session.isOpen()) {
+                                session.sendMessage(new TextMessage(payload));
+                                messageRepository.deleteById(pm.getId());
+                            }
                         } catch (Exception sendEx) {
                             logger.warn("Failed to deliver pending message to user {}: {}", user, sendEx.getMessage());
                         }
@@ -114,18 +131,20 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
         String id = node.has("id") ? node.get("id").asText() : UUID.randomUUID().toString();
 
         WebSocketSession dest = sessions.get(to);
+        String fromUser = node.has("from") ? node.get("from").asText() : null;
+        String cipherPayload = node.has("cipher") ? node.get("cipher").asText() : node.toString();
+
         if (dest != null && dest.isOpen()) {
-            // forward as-is (ciphertext opaque)
-            dest.sendMessage(new TextMessage(message.getPayload()));
+            try {
+                // forward as-is (ciphertext opaque)
+                dest.sendMessage(new TextMessage(message.getPayload()));
+            } catch (Exception sendEx) {
+                logger.warn("Live delivery failed for {} -> {}: {}. Queueing message instead.", fromUser, to, sendEx.getMessage());
+                persistPendingMessage(id, fromUser, to, cipherPayload);
+            }
         } else {
             // persist to pending queue (cipher stored opaque)
-            PendingMessage pm = new PendingMessage();
-            pm.setId(UUID.fromString(id));
-            pm.setFromUser(node.has("from") ? node.get("from").asText() : null);
-            pm.setToUser(to);
-            pm.setCipher(node.has("cipher") ? node.get("cipher").asText() : node.toString());
-            pm.setCreatedAt(Instant.now());
-            messageRepository.save(pm);
+            persistPendingMessage(id, fromUser, to, cipherPayload);
         }
     }
 

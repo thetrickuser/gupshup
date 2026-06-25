@@ -90,37 +90,47 @@ export async function getActiveConversations(
   encryptionKey: string
 ): Promise<Conversation[]> {
   const query = `
-    SELECT 
-      CASE WHEN sender_id = ? THEN recipient_id ELSE sender_id END as recipient_id,
-      payload as last_message,
-      created_at as last_updated
-    FROM messages m1
-    INNER JOIN (
-      SELECT 
-        CASE WHEN sender_id = ? THEN recipient_id ELSE sender_id END as conversational_partner,
-        MAX(created_at) as max_created
-      FROM messages
-      WHERE sender_id = ? OR recipient_id = ?
-      GROUP BY conversational_partner
-    ) m2 ON (CASE WHEN m1.sender_id = ? THEN m1.recipient_id ELSE m1.sender_id END) = m2.conversational_partner 
-        AND m1.created_at = m2.max_created
-    ORDER BY m1.created_at DESC;
+    SELECT id, sender_id, recipient_id, payload, created_at
+    FROM messages
+    WHERE sender_id = ? OR recipient_id = ?
+    ORDER BY created_at DESC, id DESC;
   `;
   
   interface RawConversationRow {
+    id: string;
+    sender_id: string;
     recipient_id: string;
-    last_message: string;
-    last_updated: number;
+    payload: string;
+    created_at: number;
   }
 
-  const rows = await db.getAllAsync(query, [myId, myId, myId, myId, myId]) as RawConversationRow[];
-  
-  // Decrypt the single most recent snippet before pushing to the Inbox view
-  return rows.map(row => ({
-    recipient_id: row.recipient_id,
-    last_message: decryptPayload(row.last_message, encryptionKey),
-    last_updated: row.last_updated
-  }));
+  const rows = await db.getAllAsync(query, [myId, myId]) as RawConversationRow[];
+  const latestByPartner = new Map<string, RawConversationRow>();
+
+  rows.forEach((row) => {
+    const partnerId = row.sender_id === myId ? row.recipient_id : row.sender_id;
+    const existing = latestByPartner.get(partnerId);
+
+    if (!existing) {
+      latestByPartner.set(partnerId, row);
+      return;
+    }
+
+    if (
+      row.created_at > existing.created_at ||
+      (row.created_at === existing.created_at && row.id > existing.id)
+    ) {
+      latestByPartner.set(partnerId, row);
+    }
+  });
+
+  return Array.from(latestByPartner.values())
+    .sort((a, b) => b.created_at - a.created_at)
+    .map((row) => ({
+      recipient_id: row.sender_id === myId ? row.recipient_id : row.sender_id,
+      last_message: decryptPayload(row.payload, encryptionKey),
+      last_updated: row.created_at
+    }));
 }
 
 // 5. Hard session cleaner

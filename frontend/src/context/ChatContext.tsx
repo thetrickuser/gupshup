@@ -34,13 +34,15 @@ export function ChatProvider({ children, currentHardwareId }: { children: React.
   const connectSocket = useCallback(() => {
     if (!currentHardwareId || wsRef.current) return;
 
-    const manifestDebuggerHost = Constants.expoConfig?.hostUri; 
-    const hostIp = manifestDebuggerHost ? manifestDebuggerHost.split(':')[0] : '192.168.1.21'; 
+    const manifestDebuggerHost = Constants.expoConfig?.hostUri;
+    const hostIp = manifestDebuggerHost ? manifestDebuggerHost.split(':')[0] : '';
     const isEmulator = hostIp.includes('10.0.2.2') || hostIp.includes('127.0.0.1') || hostIp.includes('localhost');
-    const resolvedHost = isEmulator ? '10.0.2.2' : hostIp;
 
-    // Point to your local IP or your production domain string cleanly
-    const socketUrl = `ws://${resolvedHost}:8080/ws?user=${encodeURIComponent(currentHardwareId)}`;
+    const backendBaseUrl = isEmulator ? 'http://10.0.2.2:8080' : 'https://gupshup-91e4.onrender.com';
+    const protocol = backendBaseUrl.startsWith('https://') ? 'wss://' : 'ws://';
+    const normalizedBaseUrl = backendBaseUrl.replace(/\/$/, '');
+    const socketUrl = `${protocol}${normalizedBaseUrl.replace(/^https?:\/\//, '')}/ws?user=${encodeURIComponent(currentHardwareId)}`;
+
     console.log('[Global Context] Connecting to:', socketUrl);
 
     const socket = new WebSocket(socketUrl);
