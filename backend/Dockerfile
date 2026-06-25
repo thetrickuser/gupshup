@@ -2,22 +2,15 @@
 FROM gradle:9.3.0-jdk21-jammy AS builder
 WORKDIR /workspace
 
-# Copy gradlew executable
-COPY gradlew ./
-
-# Explicitly create the destination path to prevent directory flattening
-RUN mkdir -p gradle/wrapper
-COPY gradle/wrapper/gradle-wrapper.properties gradle/wrapper/gradle-wrapper.jar ./gradle/wrapper/
-
-# Copy build files
+# Copy build configuration files directly
 COPY build.gradle settings.gradle gradle.properties ./
 
-# Pre-download dependencies (This layer will be cached unless build files change)
-RUN ./gradlew dependencies --no-daemon
+# Pre-download dependencies using the container's built-in global gradle installation
+RUN gradle dependencies --no-daemon
 
-# Copy source code and build
+# Copy source code and compile the bootable Jar
 COPY src src
-RUN ./gradlew bootJar --no-daemon
+RUN gradle bootJar --no-daemon
 
 # 2. Run Stage
 FROM eclipse-temurin:21-jre-jammy
