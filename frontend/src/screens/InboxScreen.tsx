@@ -24,15 +24,17 @@ export default function InboxScreen({ onSelectChat, currentHardwareId }: InboxSc
   const [loading, setLoading] = useState(true);
   const [db, setDb] = useState<any>(null);
   
-  const myUserId = currentHardwareId; // Use the provided hardware ID as the user ID
+  const myUserId = currentHardwareId;
   
-  // New chat modal control states
+  // 🌟 FIX 1: Unified encryption key to match ChatScreen exactly
+  const encryptionKey = "super-secret-shared-key-123";
+  
   const [modalVisible, setModalVisible] = useState(false);
   const [newRecipientInput, setNewRecipientInput] = useState('');
 
   const loadInbox = async (database: any) => {
     try {
-      const activeThreads = await getActiveConversations(database, myUserId, "secret-shared-key123");
+      const activeThreads = await getActiveConversations(database, myUserId, encryptionKey);
       setConversations(activeThreads);
       setLoading(false);
     } catch (err) {
@@ -41,6 +43,7 @@ export default function InboxScreen({ onSelectChat, currentHardwareId }: InboxSc
     }
   };
 
+  // Setup Database Connection
   useEffect(() => {
     let database: any;
     const setupInbox = async () => {
@@ -56,12 +59,23 @@ export default function InboxScreen({ onSelectChat, currentHardwareId }: InboxSc
     setupInbox();
   }, []);
 
+  // 🌟 FIX 2: Live Refresh Poller
+  // Automatically re-queries local storage to display live incoming messages in real-time
+  useEffect(() => {
+    if (!db) return;
+    
+    const interval = setInterval(() => {
+      loadInbox(db);
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [db]);
+
   const handleStartNewChat = () => {
     if (!newRecipientInput.trim()) return;
     const targetRecipient = newRecipientInput.trim();
     setModalVisible(false);
     setNewRecipientInput('');
-    // Route into the chat view using the newly defined target context
     onSelectChat(targetRecipient, myUserId);
   };
 
@@ -71,7 +85,7 @@ export default function InboxScreen({ onSelectChat, currentHardwareId }: InboxSc
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>Messages</Text>
-          <Text style={styles.profileBadge}>ID: {myUserId} • 🛡️ Secure</Text>
+          <Text style={styles.profileBadge}>ID: {myUserId} • 🛡️ Secure Channel</Text>
         </View>
       </View>
 

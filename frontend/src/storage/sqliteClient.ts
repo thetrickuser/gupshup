@@ -23,9 +23,6 @@ export async function initDb(): Promise<SQLite.SQLiteDatabase> {
     const db = await SQLite.openDatabaseAsync('gupshup.db');
     console.log('initDb: Database opened successfully');
 
-    console.log('initDb: Dropping old table...');
-    await db.execAsync(`DROP TABLE IF EXISTS messages;`)
-    
     console.log('initDb: Creating multi-conversation table schema...');
     await db.execAsync(`
       PRAGMA journal_mode = WAL;

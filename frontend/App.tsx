@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import InboxScreen from './src/screens/InboxScreen';
 import ChatScreen from './src/screens/ChatScreen';
+import { ChatProvider } from './src/context/ChatContext';
 
 const USER_ID_KEY = '@secure_chat_hardware_device_fingerprint';
 
@@ -64,8 +65,8 @@ export default function App() {
 
   return (
     <View style={styles.appContainer}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      
+    <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+    <ChatProvider currentHardwareId={activeUser}>
       {currentScreen === 'INBOX' ? (
         <InboxScreen 
           onSelectChat={handleSelectChat} 
@@ -78,7 +79,8 @@ export default function App() {
           onBackToInbox={handleNavigateToInbox}
         />
       )}
-    </View>
+    </ChatProvider>
+  </View>
   );
 }
 
