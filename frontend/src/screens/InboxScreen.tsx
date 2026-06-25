@@ -16,15 +16,15 @@ import { initDb, getActiveConversations, Conversation } from '../storage/sqliteC
 
 interface InboxScreenProps {
   onSelectChat: (recipientId: string, currentUserId: string) => void;
+  currentHardwareId: string;
 }
 
-export default function InboxScreen({ onSelectChat }: InboxScreenProps) {
+export default function InboxScreen({ onSelectChat, currentHardwareId }: InboxScreenProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [db, setDb] = useState<any>(null);
   
-  // Static identities for local testing until device fingerprints are linked
-  const [myUserId] = useState('Adhyan'); 
+  const myUserId = currentHardwareId; // Use the provided hardware ID as the user ID
   
   // New chat modal control states
   const [modalVisible, setModalVisible] = useState(false);
@@ -32,7 +32,7 @@ export default function InboxScreen({ onSelectChat }: InboxScreenProps) {
 
   const loadInbox = async (database: any) => {
     try {
-      const activeThreads = await getActiveConversations(database);
+      const activeThreads = await getActiveConversations(database, myUserId, "secret-shared-key123");
       setConversations(activeThreads);
       setLoading(false);
     } catch (err) {

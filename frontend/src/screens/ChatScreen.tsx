@@ -1,4 +1,3 @@
-import 'react-native-get-random-values';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   View, 
@@ -7,23 +6,25 @@ import {
   TouchableOpacity, 
   FlatList, 
   StyleSheet, 
-  ActivityIndicator, 
+  ActivityIndicator,
   KeyboardAvoidingView, 
   Platform 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { v4 as uuidv4 } from 'uuid';
 import * as SQLite from 'expo-sqlite';
-import { insertMessage, deleteMessagesBySession, getMessagesBySession, initDb } from '../storage/sqliteClient';
+import { insertMessage, deleteMessagesBySession, getMessagesByConversation, initDb } from '../storage/sqliteClient';
 import { deriveSessionKey, encryptPayload, decryptPayload } from '../crypto/encryptionUtils';
 import useAppStateCleanup from '../hooks/useAppStateCleanup';
 import Constants from 'expo-constants';
+import * as Crypto from 'expo-crypto';
 
 interface ChatMessage {
   id: string;
+  sender_id: string;
+  recipient_id: string;
   payload: string;
   created_at: number;
-  fromSelf?: boolean; // Flag to determine bubble orientation in the UI
+  fromSelf?: boolean;
 }
 
 interface ChatScreenProps {
@@ -35,15 +36,15 @@ interface ChatScreenProps {
 export default function ChatScreen({ currentUserId, targetRecipientId, onBackToInbox }: ChatScreenProps) {
   const [text, setText] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [sessionKey] = useState<string>(uuidv4());
+  const [sessionKey] = useState<string>(Crypto.randomUUID());
   const [encryptionKey, setEncryptionKey] = useState<string | null>(null);
   const [db, setDb] = useState<SQLite.SQLiteDatabase | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  // Typing state for input controls
-  const [userId, setUserId] = useState<string>(currentUserId);
-  const [recipient, setRecipient] = useState<string>(targetRecipientId);
+  // Immutably locked identity bindings coming straight from navigation contexts
+  const [userId] = useState<string>(currentUserId);
+  const [recipient] = useState<string>(targetRecipientId);
   
   // Network locking state to prevent keystroke re-connections
   const [activeConnectedUser, setActiveConnectedUser] = useState<string | null>(null);
@@ -75,9 +76,9 @@ export default function ChatScreen({ currentUserId, targetRecipientId, onBackToI
 
   const loadMessages = async (database: SQLite.SQLiteDatabase, key: string) => {
     try {
-      const msgs = await getMessagesBySession(database, sessionKey, key);
-      // Assume historical messages in this local session were from us for fallback parsing
-      const formatted = msgs.map(m => ({ ...m, fromSelf: true }));
+      // Pulls historical lines explicitly shared between you two
+      const msgs = await getMessagesByConversation(database, userId, recipient, key);
+      const formatted = msgs.map(m => ({ ...m, fromSelf: m.sender_id === userId }));
       setMessages(formatted);
     } catch (err) {
       console.warn('Error loading messages:', err);
@@ -122,20 +123,27 @@ export default function ChatScreen({ currentUserId, targetRecipientId, onBackToI
 
         if (type === 'ACK') return;
 
-        if (type === 'MSG' && node.cipher && node.id) {
+        if (type === 'MSG' && node.cipher && node.id && node.from) {
           console.log("RAW INBOUND CIPHER:", node.cipher);
           const decrypted = decryptPayload(node.cipher, encryptionKey);
           console.log("DECRYPTED RESULT TO RENDER:", decrypted);
 
           const receivedMessage: ChatMessage = {
             id: node.id,
+            sender_id: node.from,
+            recipient_id: userId,
             payload: decrypted,
             created_at: Date.now(),
-            fromSelf: false // This flag directs it to the left side of the UI layout
+            fromSelf: false
           };
 
-          await insertMessage(db, receivedMessage.id, sessionKey, decrypted, receivedMessage.created_at, encryptionKey);
-          setMessages(prev => [receivedMessage, ...prev]);
+          // Cache payload encrypted into local storage
+          await insertMessage(db, receivedMessage.id, sessionKey, receivedMessage.sender_id, receivedMessage.recipient_id, decrypted, receivedMessage.created_at, encryptionKey);
+          
+          // Only push the live string bubble to viewport stream if it matches your active conversation window
+          if (node.from === recipient) {
+            setMessages(prev => [receivedMessage, ...prev]);
+          }
 
           if (socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'ACK', id: receivedMessage.id }));
@@ -153,7 +161,7 @@ export default function ChatScreen({ currentUserId, targetRecipientId, onBackToI
       wsRef.current = null;
       setConnected(false);
     };
-  }, [db, encryptionKey, sessionKey, activeConnectedUser]);
+  }, [db, encryptionKey, sessionKey, activeConnectedUser, recipient]);
 
   const handleConnectToggle = () => {
     if (connected) {
@@ -184,7 +192,7 @@ export default function ChatScreen({ currentUserId, targetRecipientId, onBackToI
       return;
     }
 
-    const msgId = uuidv4();
+    const msgId = Crypto.randomUUID();
     const timestamp = Date.now();
     const cipher = encryptPayload(text, encryptionKey);
     const outgoing = {
@@ -197,8 +205,8 @@ export default function ChatScreen({ currentUserId, targetRecipientId, onBackToI
 
     try {
       wsRef.current.send(JSON.stringify(outgoing));
-      await insertMessage(db, msgId, sessionKey, text, timestamp, encryptionKey);
-      setMessages(prev => [{ id: msgId, payload: text, created_at: timestamp, fromSelf: true }, ...prev]);
+      await insertMessage(db, msgId, sessionKey, activeConnectedUser, recipient, text, timestamp, encryptionKey);
+      setMessages(prev => [{ id: msgId, sender_id: activeConnectedUser, recipient_id: recipient, payload: text, created_at: timestamp, fromSelf: true }, ...prev]);
       setText('');
     } catch (err) {
       console.warn('Error sending message:', err);
@@ -226,31 +234,27 @@ export default function ChatScreen({ currentUserId, targetRecipientId, onBackToI
           <>
             {/* Top Identity & Connectivity Section */}
             <View style={styles.headerCard}>
-            <TouchableOpacity onPress={onBackToInbox} style={{ marginBottom: 12, paddingVertical: 4 }}>
-    <Text style={{ color: '#007AFF', fontSize: 16, fontWeight: '600' }}>← Back to Chats</Text>
-  </TouchableOpacity>
+              <TouchableOpacity onPress={onBackToInbox} style={styles.backButton}>
+                <Text style={styles.backButtonText}>← Back to Chats</Text>
+              </TouchableOpacity>
+
               <View style={styles.metaRow}>
                 <View style={styles.metaItem}>
                   <Text style={styles.label}>YOU</Text>
                   <TextInput
-                    style={[styles.metaInput, connected && styles.metaInputDisabled]}
+                    style={[styles.metaInput, styles.metaInputDisabled]}
                     value={userId}
-                    onChangeText={setUserId}
                     placeholder="Your ID"
-                    placeholderTextColor="#999"
-                    autoCapitalize="none"
-                    editable={!connected}
+                    editable={false}
                   />
                 </View>
                 <View style={styles.metaItem}>
                   <Text style={styles.label}>CHAT WITH</Text>
                   <TextInput
-                    style={styles.metaInput}
+                    style={[styles.metaInput, styles.metaInputDisabled]}
                     value={recipient}
-                    onChangeText={setRecipient}
                     placeholder="Recipient ID"
-                    placeholderTextColor="#999"
-                    autoCapitalize="none"
+                    editable={false}
                   />
                 </View>
               </View>
@@ -327,30 +331,12 @@ export default function ChatScreen({ currentUserId, targetRecipientId, onBackToI
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: '#F8F9FA' 
-  },
-  center: { 
-    flex: 1, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    backgroundColor: '#F8F9FA' 
-  },
-  loadingText: { 
-    marginTop: 12, 
-    fontSize: 15, 
-    color: '#666',
-    fontWeight: '500' 
-  },
-  errorText: { 
-    fontSize: 15, 
-    color: '#FF3B30', 
-    textAlign: 'center', 
-    padding: 24 
-  },
-  
-  // Header Section Styling
+  container: { flex: 1, backgroundColor: '#F8F9FA' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F8F9FA' },
+  loadingText: { marginTop: 12, fontSize: 15, color: '#666', fontWeight: '500' },
+  errorText: { fontSize: 15, color: '#FF3B30', textAlign: 'center', padding: 24 },
+  backButton: { marginBottom: 14, paddingVertical: 4 },
+  backButtonText: { color: '#007AFF', fontSize: 16, fontWeight: '600' },
   headerCard: {
     backgroundColor: '#FFFFFF',
     padding: 16,
@@ -362,194 +348,43 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 3,
   },
-  metaRow: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    marginBottom: 12 
-  },
-  metaItem: { 
-    flex: 1, 
-    marginRight: 10 
-  },
-  label: { 
-    fontSize: 10, 
-    fontWeight: '700', 
-    color: '#8E8E93', 
-    marginBottom: 6,
-    letterSpacing: 1
-  },
-  metaInput: { 
-    backgroundColor: '#F1F3F5',
-    paddingVertical: 8,
-    paddingHorizontal: 12, 
-    borderRadius: 8,
-    fontSize: 15,
-    color: '#212529',
-    fontWeight: '500'
-  },
-  metaInputDisabled: {
-    color: '#8E8E93',
-    backgroundColor: '#E9ECEF'
-  },
-  statusActionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 4
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-  },
-  badgeConnected: {
-    backgroundColor: '#E3FCEF',
-  },
-  badgeDisconnected: {
-    backgroundColor: '#F4F5F7',
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 8,
-  },
-  dotConnected: {
-    backgroundColor: '#36B37E',
-  },
-  dotDisconnected: {
-    backgroundColor: '#8E8E93',
-  },
-  statusText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  textConnected: {
-    color: '#006644',
-  },
-  textDisconnected: {
-    color: '#6B778C',
-  },
-  connectButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
-  btnConnect: {
-    backgroundColor: '#007AFF',
-  },
-  btnDisconnect: {
-    backgroundColor: '#FF3B30',
-  },
-  connectButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-
-  // Message Bubble Layout & Physics
-  listContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  bubbleWrapper: {
-    flexDirection: 'row',
-    marginVertical: 4,
-    width: '100%',
-  },
-  wrapperSelf: {
-    justifyContent: 'flex-end',
-  },
-  wrapperPartner: {
-    justifyContent: 'flex-start',
-  },
-  bubble: {
-    maxWidth: '75%',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 1,
-    elevation: 1,
-  },
-  bubbleSelf: {
-    backgroundColor: '#007AFF',
-    borderTopRightRadius: 2,
-  },
-  bubblePartner: {
-    backgroundColor: '#E5E5EA',
-    borderTopLeftRadius: 2,
-  },
-  messageText: {
-    fontSize: 16,
-    lineHeight: 20,
-  },
-  textSelf: {
-    color: '#FFFFFF',
-  },
-  textPartner: {
-    color: '#000000',
-  },
-  timestamp: {
-    fontSize: 10,
-    marginTop: 4,
-    alignSelf: 'flex-end',
-  },
-  timeSelf: {
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-  timePartner: {
-    color: '#8E8E93',
-  },
-
-  // Bottom Messaging Dock
-  inputContainer: {
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderTopWidth: 1,
-    borderColor: '#E9ECEF',
-  },
-  inputRow: { 
-    flexDirection: 'row', 
-    alignItems: 'flex-end' 
-  },
-  input: { 
-    flex: 1, 
-    backgroundColor: '#F1F3F5',
-    paddingHorizontal: 16, 
-    paddingTop: 10,
-    paddingBottom: 10,
-    marginRight: 10, 
-    borderRadius: 20,
-    fontSize: 16,
-    color: '#212529',
-    maxHeight: 100,
-  },
-  sendButton: {
-    backgroundColor: '#007AFF',
-    borderRadius: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sendButtonDisabled: {
-    backgroundColor: '#E9ECEF',
-  },
-  sendButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 16,
-  },
-  privacyBanner: {
-    fontSize: 11,
-    color: '#8E8E93',
-    textAlign: 'center',
-    marginTop: 8,
-    fontWeight: '500'
-  }
+  metaRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  metaItem: { flex: 1, marginRight: 10 },
+  label: { fontSize: 10, fontWeight: '700', color: '#8E8E93', marginBottom: 6, letterSpacing: 1 },
+  metaInput: { backgroundColor: '#F1F3F5', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, fontSize: 15, color: '#212529', fontWeight: '500' },
+  metaInputDisabled: { color: '#6c757d', backgroundColor: '#E9ECEF' },
+  statusActionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20 },
+  badgeConnected: { backgroundColor: '#E3FCEF' },
+  badgeDisconnected: { backgroundColor: '#F4F5F7' },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  dotConnected: { backgroundColor: '#36B37E' },
+  dotDisconnected: { backgroundColor: '#8E8E93' },
+  statusText: { fontSize: 13, fontWeight: '600' },
+  textConnected: { color: '#006644' },
+  textDisconnected: { color: '#6B778C' },
+  connectButton: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 8 },
+  btnConnect: { backgroundColor: '#007AFF' },
+  btnDisconnect: { backgroundColor: '#FF3B30' },
+  connectButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 14 },
+  listContent: { paddingHorizontal: 16, paddingVertical: 12 },
+  bubbleWrapper: { flexDirection: 'row', marginVertical: 4, width: '100%' },
+  wrapperSelf: { justifyContent: 'flex-end' },
+  wrapperPartner: { justifyContent: 'flex-start' },
+  bubble: { maxWidth: '75%', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 1, elevation: 1 },
+  bubbleSelf: { backgroundColor: '#007AFF', borderTopRightRadius: 2 },
+  bubblePartner: { backgroundColor: '#E5E5EA', borderTopLeftRadius: 2 },
+  messageText: { fontSize: 16, lineHeight: 20 },
+  textSelf: { color: '#FFFFFF' },
+  textPartner: { color: '#000000' },
+  timestamp: { fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
+  timeSelf: { color: 'rgba(255, 255, 255, 0.7)' },
+  timePartner: { color: '#8E8E93' },
+  inputContainer: { backgroundColor: '#FFFFFF', padding: 12, borderTopWidth: 1, borderColor: '#E9ECEF' },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end' },
+  input: { flex: 1, backgroundColor: '#F1F3F5', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, marginRight: 10, borderRadius: 20, fontSize: 16, color: '#212529', maxHeight: 100 },
+  sendButton: { backgroundColor: '#007AFF', borderRadius: 20, paddingVertical: 10, paddingHorizontal: 18, justifyContent: 'center', alignItems: 'center' },
+  sendButtonDisabled: { backgroundColor: '#E9ECEF' },
+  sendButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 16 },
+  privacyBanner: { fontSize: 11, color: '#8E8E93', textAlign: 'center', marginTop: 8, fontWeight: '500' }
 });
