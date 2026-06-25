@@ -2,9 +2,14 @@
 FROM gradle:9.3.0-jdk21-jammy AS builder
 WORKDIR /workspace
 
-# Copy dependency files first
-COPY gradlew gradlew
-COPY gradle gradle
+# Copy gradlew executable
+COPY gradlew ./
+
+# Explicitly create the destination path to prevent directory flattening
+RUN mkdir -p gradle/wrapper
+COPY gradle/wrapper/gradle-wrapper.properties gradle/wrapper/gradle-wrapper.jar ./gradle/wrapper/
+
+# Copy build files
 COPY build.gradle settings.gradle gradle.properties ./
 
 # Pre-download dependencies (This layer will be cached unless build files change)
@@ -18,11 +23,9 @@ RUN ./gradlew bootJar --no-daemon
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
 
-# Create a non-root user for security
 RUN addgroup --system spring && adduser --system spring --ingroup spring
 USER spring:spring
 
-# Copy the jar from the builder stage
 COPY --from=builder /workspace/build/libs/*.jar app.jar
 
 ENV PORT=8080
