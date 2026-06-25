@@ -11,7 +11,7 @@ spring:
       mode: always
       schema-locations: classpath:schema.sql
 server:
-  port: 8080
+  port: ${PORT:8080}
 logging:
   level:
     root: INFO
