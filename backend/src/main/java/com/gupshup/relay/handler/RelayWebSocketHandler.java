@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -70,13 +71,13 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
 
             // Fetch pending messages and forward them to the connected client.
             try {
-                java.util.List<com.gupshup.relay.model.PendingMessage> pending = messageRepository.findByToUser(user);
+                List<PendingMessage> pending = messageRepository.findByToUser(user);
                 if (pending != null && !pending.isEmpty()) {
-                    for (com.gupshup.relay.model.PendingMessage pm : pending) {
+                    for (PendingMessage pm : pending) {
                         try {
                             ObjectNode node = mapper.createObjectNode();
                             node.put("type", "MSG");
-                            String idStr = pm.getId() != null ? pm.getId().toString() : java.util.UUID.randomUUID().toString();
+                            String idStr = pm.getId() != null ? pm.getId().toString() : UUID.randomUUID().toString();
                             node.put("id", idStr);
                             if (pm.getFromUser() != null) node.put("from", pm.getFromUser());
                             node.put("to", pm.getToUser());

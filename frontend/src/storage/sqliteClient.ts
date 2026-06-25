@@ -61,3 +61,38 @@ export async function deleteMessagesBySession(
   await db.runAsync(`DELETE FROM messages WHERE session_key = ?;`, [sessionKey]);
   console.log(`Deleted messages for session: ${sessionKey}`);
 }
+
+export interface Conversation {
+  recipient_id: string;
+  last_message: string;
+  last_updated: number;
+}
+
+export const getActiveConversations = (db: any): Promise<Conversation[]> => {
+  return new Promise((resolve, reject) => {
+    db.transaction((tx: any) => {
+      tx.executeSql(
+        `SELECT m1.recipient_id, m1.payload as last_message, m1.created_at as last_updated
+         FROM messages m1
+         INNER JOIN (
+             SELECT recipient_id, MAX(created_at) as max_created
+             FROM messages
+             GROUP BY recipient_id
+         ) m2 ON m1.recipient_id = m2.recipient_id AND m1.created_at = m2.max_created
+         ORDER BY m1.created_at DESC;`,
+        [],
+        (_: any, results: any) => {
+          const conversations: Conversation[] = [];
+          for (let i = 0; i < results.rows.length; i++) {
+            conversations.push(results.rows.item(i));
+          }
+          resolve(conversations);
+        },
+        (_: any, error: any) => {
+          reject(error);
+          return false;
+        }
+      );
+    });
+  });
+};

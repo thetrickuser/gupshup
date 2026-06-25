@@ -8,10 +8,10 @@ import {
   FlatList, 
   StyleSheet, 
   ActivityIndicator, 
-  SafeAreaView, 
   KeyboardAvoidingView, 
   Platform 
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { v4 as uuidv4 } from 'uuid';
 import * as SQLite from 'expo-sqlite';
 import { insertMessage, deleteMessagesBySession, getMessagesBySession, initDb } from '../storage/sqliteClient';
@@ -26,7 +26,13 @@ interface ChatMessage {
   fromSelf?: boolean; // Flag to determine bubble orientation in the UI
 }
 
-export default function ChatScreen() {
+interface ChatScreenProps {
+  currentUserId: string;
+  targetRecipientId: string;
+  onBackToInbox: () => void;
+}
+
+export default function ChatScreen({ currentUserId, targetRecipientId, onBackToInbox }: ChatScreenProps) {
   const [text, setText] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionKey] = useState<string>(uuidv4());
@@ -36,8 +42,8 @@ export default function ChatScreen() {
   const [error, setError] = useState<string | null>(null);
   
   // Typing state for input controls
-  const [userId, setUserId] = useState<string>('');
-  const [recipient, setRecipient] = useState<string>('');
+  const [userId, setUserId] = useState<string>(currentUserId);
+  const [recipient, setRecipient] = useState<string>(targetRecipientId);
   
   // Network locking state to prevent keystroke re-connections
   const [activeConnectedUser, setActiveConnectedUser] = useState<string | null>(null);
@@ -220,6 +226,9 @@ export default function ChatScreen() {
           <>
             {/* Top Identity & Connectivity Section */}
             <View style={styles.headerCard}>
+            <TouchableOpacity onPress={onBackToInbox} style={{ marginBottom: 12, paddingVertical: 4 }}>
+    <Text style={{ color: '#007AFF', fontSize: 16, fontWeight: '600' }}>← Back to Chats</Text>
+  </TouchableOpacity>
               <View style={styles.metaRow}>
                 <View style={styles.metaItem}>
                   <Text style={styles.label}>YOU</Text>
