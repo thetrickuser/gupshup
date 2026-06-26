@@ -42,7 +42,7 @@ export default function ChatScreen({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   // Pull persistent socket state and explicit data wiping mechanisms from global context
-  const { connected, explicitDisconnectAndWipe, db, wsRef, connectSocket, setActiveRecipientId } =
+  const { connected, explicitDisconnectAndWipe, db, wsRef, connectSocket, setActiveRecipientId, onlineUsers, registerMessageListener } =
     useChat();
 
   const encryptionKey = "super-secret-shared-key-123";
@@ -80,14 +80,20 @@ export default function ChatScreen({
     }
   };
 
-  // Poll database or context state changes to catch live incoming messages while screen is open
+  // Listen for message events from global context (replaces heavy polling)
   useEffect(() => {
     if (!db) return;
+    
+    // Initial fetch
+    loadMessages();
 
-    // Simple 1-second background poll fallback to update UI state stream if context inserts new rows
-    const interval = setInterval(loadMessages, 1000);
-    return () => clearInterval(interval);
-  }, [db]);
+    // Subscribe to incoming messages
+    const unsubscribe = registerMessageListener(() => {
+      loadMessages();
+    });
+
+    return () => unsubscribe();
+  }, [db, targetRecipientId]);
 
   // YOUR USP: Deletes historical traces locally and terminates connection permanently
   const handleWipeAndDisconnect = async () => {
@@ -170,7 +176,7 @@ export default function ChatScreen({
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         {/* Top Operational Header */}
         <View style={styles.headerCard}>
@@ -201,26 +207,53 @@ export default function ChatScreen({
             )}
           </View>
 
-          <View
-            style={[
-              styles.networkStatusBadge,
-              connected ? styles.bgConnected : styles.bgDisconnected,
-            ]}
-          >
+          <View style={styles.badgeRow}>
+            {/* My own WebSocket status */}
             <View
               style={[
-                styles.statusDot,
-                connected ? styles.dotConnected : styles.dotDisconnected,
-              ]}
-            />
-            <Text
-              style={[
-                styles.statusText,
-                connected ? styles.textConnected : styles.textDisconnected,
+                styles.networkStatusBadge,
+                connected ? styles.bgConnected : styles.bgDisconnected,
               ]}
             >
-              {connected ? "Channel Maintained" : "Connection Broken"}
-            </Text>
+              <View
+                style={[
+                  styles.statusDot,
+                  connected ? styles.dotConnected : styles.dotDisconnected,
+                ]}
+              />
+              <Text
+                style={[
+                  styles.statusText,
+                  connected ? styles.textConnected : styles.textDisconnected,
+                ]}
+              >
+                {connected ? "Server Connected" : "Server Disconnected"}
+              </Text>
+            </View>
+
+            {/* Recipient's online presence status */}
+            <View
+              style={[
+                styles.networkStatusBadge,
+                onlineUsers.has(targetRecipientId) ? styles.bgConnected : styles.bgDisconnected,
+                { marginLeft: 8 }
+              ]}
+            >
+              <View
+                style={[
+                  styles.statusDot,
+                  onlineUsers.has(targetRecipientId) ? styles.dotConnected : styles.dotDisconnected,
+                ]}
+              />
+              <Text
+                style={[
+                  styles.statusText,
+                  onlineUsers.has(targetRecipientId) ? styles.textConnected : styles.textDisconnected,
+                ]}
+              >
+                {onlineUsers.has(targetRecipientId) ? "Recipient Active" : "Recipient Offline"}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -345,6 +378,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   wipeButtonText: { color: "#FFFFFF", fontWeight: "600", fontSize: 13 },
+  badgeRow: { flexDirection: "row", marginTop: 4 },
   networkStatusBadge: {
     flexDirection: "row",
     alignItems: "center",

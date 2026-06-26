@@ -23,6 +23,8 @@ export async function initDb(): Promise<SQLite.SQLiteDatabase> {
     const db = await SQLite.openDatabaseAsync('gupshup.db');
     console.log('initDb: Database opened successfully');
 
+    // await db.execAsync(`DROP TABLE IF EXISTS messages;`); // Optional: Clear existing table for testing
+
     console.log('initDb: Creating multi-conversation table schema...');
     await db.execAsync(`
       PRAGMA journal_mode = WAL;
@@ -56,7 +58,7 @@ export async function insertMessage(
 ): Promise<void> {
   const encrypted = encryptPayload(payload, encryptionKey);
   await db.runAsync(
-    `INSERT INTO messages (id, session_key, sender_id, recipient_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?);`,
+    `INSERT OR IGNORE INTO messages (id, session_key, sender_id, recipient_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?);`,
     [id, sessionKey, senderId, recipientId, encrypted, timestamp]
   );
 }

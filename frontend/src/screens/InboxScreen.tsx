@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as SQLite from 'expo-sqlite';
 import { initDb, getActiveConversations, Conversation } from '../storage/sqliteClient';
+import { useChat } from '../context/ChatContext';
 
 interface InboxScreenProps {
   onSelectChat: (recipientId: string, currentUserId: string) => void;
@@ -23,6 +24,8 @@ export default function InboxScreen({ onSelectChat, currentHardwareId }: InboxSc
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [db, setDb] = useState<any>(null);
+  
+  const { registerMessageListener } = useChat();
   
   const myUserId = currentHardwareId;
   
@@ -43,33 +46,33 @@ export default function InboxScreen({ onSelectChat, currentHardwareId }: InboxSc
     }
   };
 
-  // Setup Database Connection
+  // Setup Database Connection and Message Subscription
   useEffect(() => {
     let database: any;
+    let unsubscribe: (() => void) | undefined;
+
     const setupInbox = async () => {
       try {
         database = await initDb();
         setDb(database);
         await loadInbox(database);
+
+        // Subscribe to event updates from ChatContext
+        unsubscribe = registerMessageListener(() => {
+          loadInbox(database);
+        });
       } catch (err) {
         console.error('Failed to initialize inbox DB channel:', err);
         setLoading(false);
       }
     };
+    
     setupInbox();
-  }, []);
 
-  // 🌟 FIX 2: Live Refresh Poller
-  // Automatically re-queries local storage to display live incoming messages in real-time
-  useEffect(() => {
-    if (!db) return;
-    
-    const interval = setInterval(() => {
-      loadInbox(db);
-    }, 1000);
-    
-    return () => clearInterval(interval);
-  }, [db]);
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   const handleStartNewChat = () => {
     if (!newRecipientInput.trim()) return;

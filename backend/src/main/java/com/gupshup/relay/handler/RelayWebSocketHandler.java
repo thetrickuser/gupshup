@@ -9,6 +9,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.ArrayNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,6 +61,25 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    private void broadcastPresence(String user, String status) {
+        try {
+            ObjectNode presenceNode = mapper.createObjectNode();
+            presenceNode.put("type", "PRESENCE");
+            presenceNode.put("user", user);
+            presenceNode.put("status", status);
+            String payload = mapper.writeValueAsString(presenceNode);
+            TextMessage message = new TextMessage(payload);
+
+            sessions.forEach((u, s) -> {
+                if (!u.equals(user) && s.isOpen()) {
+                    try {
+                        s.sendMessage(message);
+                    } catch (Exception ignored) {}
+                }
+            });
+        } catch (Exception ignored) {}
+    }
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         // Enhanced user extraction: attributes, headers, then URI query
@@ -81,9 +101,22 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
         }
 
         if (user != null) {
+            session.getAttributes().put("user", user);
             sessions.put(user, session);
 
-            // Fetch pending messages and forward them to the connected client.
+            // Broadcast presence update
+            broadcastPresence(user, "ONLINE");
+
+            // Push current online directory to user
+            try {
+                ObjectNode listNode = mapper.createObjectNode();
+                listNode.put("type", "PRESENCE_LIST");
+                ArrayNode usersArray = listNode.putArray("users");
+                sessions.keySet().forEach(usersArray::add);
+                session.sendMessage(new TextMessage(mapper.writeValueAsString(listNode)));
+            } catch (Exception ignored) {}
+
+            // Fetch and forward pending messages (clearing queue upon delivery check)
             try {
                 List<PendingMessage> pending = messageRepository.findByToUser(user);
                 if (pending != null && !pending.isEmpty()) {
@@ -100,7 +133,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
                             String payload = mapper.writeValueAsString(node);
                             if (session.isOpen()) {
                                 session.sendMessage(new TextMessage(payload));
-                                messageRepository.deleteById(pm.getId());
+                                // Do NOT delete immediately. Wait for client ACK.
                             }
                         } catch (Exception sendEx) {
                             logger.warn("Failed to deliver pending message to user {}: {}", user, sendEx.getMessage());
@@ -117,6 +150,15 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         JsonNode node = mapper.readTree(message.getPayload());
         String type = Optional.ofNullable(node.get("type")).map(JsonNode::asText).orElse("MSG");
+
+        if ("PING".equalsIgnoreCase(type)) {
+            try {
+                ObjectNode pongNode = mapper.createObjectNode();
+                pongNode.put("type", "PONG");
+                session.sendMessage(new TextMessage(mapper.writeValueAsString(pongNode)));
+            } catch (Exception ignored) {}
+            return;
+        }
 
         if ("ACK".equalsIgnoreCase(type)) {
             String id = node.get("id").asText();
@@ -136,21 +178,28 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
 
         if (dest != null && dest.isOpen()) {
             try {
-                // forward as-is (ciphertext opaque)
+                // Forward directly (zero-retention: does NOT touch the database)
                 dest.sendMessage(new TextMessage(message.getPayload()));
             } catch (Exception sendEx) {
-                logger.warn("Live delivery failed for {} -> {}: {}. Queueing message instead.", fromUser, to, sendEx.getMessage());
+                // Write to database ONLY if direct delivery fails
+                logger.warn("Live delivery failed for {} -> {}: {}. Saving to queue.", fromUser, to, sendEx.getMessage());
                 persistPendingMessage(id, fromUser, to, cipherPayload);
             }
         } else {
-            // persist to pending queue (cipher stored opaque)
+            // Recipient is offline, write to queue
             persistPendingMessage(id, fromUser, to, cipherPayload);
         }
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, org.springframework.web.socket.CloseStatus status) throws Exception {
-        String user = extractUserId(session);
-        if (user != null) sessions.remove(user);
+        String user = (String) session.getAttributes().get("user");
+        if (user == null) {
+            user = extractUserId(session);
+        }
+        if (user != null) {
+            sessions.remove(user);
+            broadcastPresence(user, "OFFLINE");
+        }
     }
 }

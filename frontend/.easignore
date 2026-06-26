@@ -1,0 +1,6 @@
+# Ignore local database storage volumes
+backend/pgdata/
+pgdata/
+
+# Ignore the rest of the backend directory to speed up build uploads
+backend/
