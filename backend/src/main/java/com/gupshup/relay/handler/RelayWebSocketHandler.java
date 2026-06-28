@@ -56,6 +56,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
             pm.setCipher(payload);
             pm.setCreatedAt(Instant.now());
             messageRepository.save(pm);
+            logger.info("Queued pending message id={} for user={} from={}", id, toUser, fromUser);
         } catch (Exception ex) {
             logger.warn("Failed to persist pending message for {} -> {}: {}", fromUser, toUser, ex.getMessage());
         }
@@ -63,6 +64,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
 
     private void broadcastPresence(String user, String status) {
         try {
+            logger.debug("Broadcasting presence update for user={} status={}", user, status);
             ObjectNode presenceNode = mapper.createObjectNode();
             presenceNode.put("type", "PRESENCE");
             presenceNode.put("user", user);
@@ -82,6 +84,9 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        String sessionId = session.getId();
+        logger.info("WebSocket connection established: session={}", sessionId);
+
         // Enhanced user extraction: attributes, headers, then URI query
         String user = null;
         try {
@@ -103,6 +108,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
         if (user != null) {
             session.getAttributes().put("user", user);
             sessions.put(user, session);
+            logger.info("Registered session={} for user={} (activeSessions={})", sessionId, user, sessions.size());
 
             // Broadcast presence update
             broadcastPresence(user, "ONLINE");
@@ -120,6 +126,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
             try {
                 List<PendingMessage> pending = messageRepository.findByToUser(user);
                 if (pending != null && !pending.isEmpty()) {
+                    logger.info("Delivering {} pending message(s) to user={}", pending.size(), user);
                     for (PendingMessage pm : pending) {
                         try {
                             ObjectNode node = mapper.createObjectNode();
@@ -148,8 +155,10 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        String sessionId = session.getId();
         JsonNode node = mapper.readTree(message.getPayload());
         String type = Optional.ofNullable(node.get("type")).map(JsonNode::asText).orElse("MSG");
+        logger.debug("Received {} message on session={}", type, sessionId);
 
         if ("PING".equalsIgnoreCase(type)) {
             try {
@@ -162,9 +171,13 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
 
         if ("ACK".equalsIgnoreCase(type)) {
             String id = node.get("id").asText();
+            logger.info("Received ACK for messageId={} from session={}", id, sessionId);
             try {
                 messageRepository.deleteById(UUID.fromString(id));
-            } catch (Exception ignore) {}
+                logger.debug("Deleted pending message id={} after ACK", id);
+            } catch (Exception ex) {
+                logger.warn("Failed to delete pending message id={} after ACK: {}", id, ex.getMessage());
+            }
             return;
         }
 
@@ -178,6 +191,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
 
         if (dest != null && dest.isOpen()) {
             try {
+                logger.info("Forwarding message id={} from={} to={} via active session={}", id, fromUser, to, sessionId);
                 // Forward directly (zero-retention: does NOT touch the database)
                 dest.sendMessage(new TextMessage(message.getPayload()));
             } catch (Exception sendEx) {
@@ -186,6 +200,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
                 persistPendingMessage(id, fromUser, to, cipherPayload);
             }
         } else {
+            logger.info("Recipient {} is offline for message id={} from={}. Queuing message.", to, id, fromUser);
             // Recipient is offline, write to queue
             persistPendingMessage(id, fromUser, to, cipherPayload);
         }
@@ -194,6 +209,7 @@ public class RelayWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, org.springframework.web.socket.CloseStatus status) throws Exception {
         String user = (String) session.getAttributes().get("user");
+        logger.info("WebSocket connection closed: session={} user={} status={}", session.getId(), user, status);
         if (user == null) {
             user = extractUserId(session);
         }
