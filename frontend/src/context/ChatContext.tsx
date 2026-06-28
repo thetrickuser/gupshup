@@ -61,7 +61,7 @@ export function ChatProvider({ children, currentHardwareId }: { children: React.
     if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
 
-    const backendBaseUrl = process.env.BACKEND_URL;
+    const backendBaseUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
     const protocol = backendBaseUrl.startsWith('https://') ? 'wss://' : 'ws://';
     const normalizedBaseUrl = backendBaseUrl.replace(/\/$/, '');
     const socketUrl = `${protocol}${normalizedBaseUrl.replace(/^https?:\/\//, '')}/ws?user=${encodeURIComponent(currentHardwareId)}`;
