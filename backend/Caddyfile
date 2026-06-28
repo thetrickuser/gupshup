@@ -1,3 +1,3 @@
-${DOMAIN_NAME} {
-    reverse_proxy backend:${APP_PORT}
+{$DOMAIN_NAME} {
+    reverse_proxy backend:{$APP_PORT}
 }
