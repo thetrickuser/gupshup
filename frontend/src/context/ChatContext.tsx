@@ -61,11 +61,7 @@ export function ChatProvider({ children, currentHardwareId }: { children: React.
     if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
 
-    const manifestDebuggerHost = Constants.expoConfig?.hostUri;
-    const hostIp = manifestDebuggerHost ? manifestDebuggerHost.split(':')[0] : '';
-    const isEmulator = hostIp.includes('10.0.2.2') || hostIp.includes('127.0.0.1') || hostIp.includes('localhost');
-
-    const backendBaseUrl = isEmulator ? 'http://10.0.2.2:8080' : 'https://gupshup-91e4.onrender.com';
+    const backendBaseUrl = process.env.BACKEND_URL;
     const protocol = backendBaseUrl.startsWith('https://') ? 'wss://' : 'ws://';
     const normalizedBaseUrl = backendBaseUrl.replace(/\/$/, '');
     const socketUrl = `${protocol}${normalizedBaseUrl.replace(/^https?:\/\//, '')}/ws?user=${encodeURIComponent(currentHardwareId)}`;
