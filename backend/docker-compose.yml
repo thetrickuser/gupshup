@@ -1,19 +1,47 @@
 version: '3.8'
+
 services:
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
+    container_name: gupshup-db
+    restart: always
     environment:
-      POSTGRES_DB: relay
-      POSTGRES_USER: relay
-      POSTGRES_PASSWORD: relaypass
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
     volumes:
-      # Using a local folder with :Z solves the rootless permission issue
-      - ./pgdata:/var/lib/postgresql/data:Z
-    healthcheck:
-      # Adding -h 127.0.0.1 ensures the healthcheck resolves correctly
-      test: ["CMD-SHELL", "pg_isready -U relay -h 127.0.0.1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - ./pgdata:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gupshup-app
+    restart: always
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - PORT=${APP_PORT}
+    depends_on:
+      - postgres
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: gupshup-proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  caddy_data:
+  caddy_config:
